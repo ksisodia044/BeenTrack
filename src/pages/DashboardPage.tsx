@@ -7,10 +7,12 @@ import { StockBadge } from '@/components/StockBadge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { dashboardApi } from '@/api/client';
+import { useAuth } from '@/hooks/useAuth';
 import type { DashboardSummary } from '@/types';
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -92,9 +94,11 @@ export default function DashboardPage() {
             <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/products')}>
               <Plus className="w-4 h-4 mr-2" /> Add Product
             </Button>
-            <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/suppliers')}>
-              <Plus className="w-4 h-4 mr-2" /> Add Supplier
-            </Button>
+            {isAdmin && (
+              <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/suppliers')}>
+                <Plus className="w-4 h-4 mr-2" /> Add Supplier
+              </Button>
+            )}
           </div>
         </div>
       </div>
