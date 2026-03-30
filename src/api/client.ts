@@ -453,16 +453,15 @@ export const usersApi = {
   },
 
   updateRole: async (userId: string, role: 'ADMIN' | 'STAFF'): Promise<void> => {
-    // Upsert role
-    const { error } = await supabase.from('user_roles')
-      .upsert({ user_id: userId, role }, { onConflict: 'user_id,role' });
-    if (error) {
-      // If upsert fails, try update
-      const { error: updateErr } = await supabase.from('user_roles')
-        .update({ role })
-        .eq('user_id', userId);
-      if (updateErr) throw updateErr;
-    }
+    // The UI assumes one role row per user, so replace all existing role rows first.
+    const { error: deleteError } = await supabase.from('user_roles')
+      .delete()
+      .eq('user_id', userId);
+    if (deleteError) throw deleteError;
+
+    const { error: insertError } = await supabase.from('user_roles')
+      .insert({ user_id: userId, role });
+    if (insertError) throw insertError;
   },
 
   updateStatus: async (userId: string, isActive: boolean): Promise<void> => {
