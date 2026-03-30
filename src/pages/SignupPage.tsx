@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
@@ -7,12 +7,18 @@ import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
 
 export default function SignupPage() {
-  const { signup } = useAuth();
+  const { signup, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,7 +33,6 @@ export default function SignupPage() {
     setLoading(true);
     try {
       await signup(email, password, name);
-      navigate('/dashboard');
     } catch (err) {
       toast({ title: err instanceof Error ? err.message : 'Signup failed', variant: 'destructive' });
     } finally {
