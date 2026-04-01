@@ -15,8 +15,23 @@ WHERE table_schema = 'public'
     'sales',
     'sale_items',
     'business_settings'
-  )
+)
 ORDER BY table_name;
+
+-- Expected RLS state
+SELECT tablename, rowsecurity
+FROM pg_tables
+WHERE schemaname = 'public'
+  AND tablename IN (
+    'profiles',
+    'user_roles',
+    'products',
+    'suppliers',
+    'sales',
+    'sale_items',
+    'business_settings'
+  )
+ORDER BY tablename;
 
 -- Expected public functions
 SELECT routine_name
@@ -34,13 +49,17 @@ ORDER BY routine_name;
 -- Expected auth signup trigger
 SELECT trigger_name, event_object_schema, event_object_table
 FROM information_schema.triggers
-WHERE trigger_name = 'on_auth_user_created';
-
--- Expected updated_at trigger(s)
-SELECT trigger_name, event_object_schema, event_object_table
-FROM information_schema.triggers
-WHERE trigger_name IN ('update_profiles_updated_at', 'update_products_updated_at')
+WHERE trigger_name IN ('on_auth_user_created', 'update_profiles_updated_at', 'update_products_updated_at', 'deduct_stock_after_sale_item')
 ORDER BY trigger_name;
+
+-- Expected receipt sequence and business settings row
+SELECT sequencename
+FROM pg_sequences
+WHERE schemaname = 'public'
+  AND sequencename = 'receipt_no_seq';
+
+SELECT COUNT(*) AS business_settings_rows
+FROM public.business_settings;
 
 -- Policies relevant to auth, roles, products, suppliers, sales, and settings
 SELECT schemaname, tablename, policyname
@@ -56,3 +75,39 @@ WHERE schemaname = 'public'
     'business_settings'
   )
 ORDER BY tablename, policyname;
+
+-- Any missing expected policies should appear below.
+WITH expected_policies(tablename, policyname) AS (
+  VALUES
+    ('profiles', 'Users can view their own profile'),
+    ('profiles', 'Users can update their own profile'),
+    ('profiles', 'Admins can view all profiles'),
+    ('profiles', 'Admins can update all profiles'),
+    ('user_roles', 'Users can view their own role'),
+    ('user_roles', 'Admins can view all roles'),
+    ('user_roles', 'Admins can insert roles'),
+    ('user_roles', 'Admins can update roles'),
+    ('user_roles', 'Admins can delete roles'),
+    ('products', 'Authenticated users can view products'),
+    ('products', 'Admins can insert products'),
+    ('products', 'Admins can update products'),
+    ('products', 'Admins can delete products'),
+    ('suppliers', 'Authenticated users can view suppliers'),
+    ('suppliers', 'Admins can insert suppliers'),
+    ('suppliers', 'Admins can update suppliers'),
+    ('suppliers', 'Admins can delete suppliers'),
+    ('sales', 'Authenticated users can view sales'),
+    ('sales', 'Authenticated users can create sales'),
+    ('sale_items', 'Authenticated users can view sale items'),
+    ('sale_items', 'Users can insert items for their own sales'),
+    ('business_settings', 'Authenticated users can view settings'),
+    ('business_settings', 'Admins can update settings')
+)
+SELECT expected_policies.tablename, expected_policies.policyname
+FROM expected_policies
+LEFT JOIN pg_policies
+  ON pg_policies.schemaname = 'public'
+ AND pg_policies.tablename = expected_policies.tablename
+ AND pg_policies.policyname = expected_policies.policyname
+WHERE pg_policies.policyname IS NULL
+ORDER BY expected_policies.tablename, expected_policies.policyname;
