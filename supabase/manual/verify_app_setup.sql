@@ -18,6 +18,14 @@ WHERE table_schema = 'public'
 )
 ORDER BY table_name;
 
+-- Expected profile columns
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'profiles'
+  AND column_name IN ('id', 'name', 'email', 'phone', 'is_active', 'created_at', 'updated_at')
+ORDER BY column_name;
+
 -- Expected RLS state
 SELECT tablename, rowsecurity
 FROM pg_tables

@@ -431,19 +431,18 @@ export const dashboardApi = {
 // ── Users (admin) ─────────────────────────────────────
 export const usersApi = {
   list: async (): Promise<AppUser[]> => {
-    const { data: profiles, error } = await supabase.from('profiles').select('*');
+    const { data: profiles, error } = await supabase
+      .from('profiles')
+      .select('id, name, phone, is_active, created_at, email');
     if (error) throw error;
 
-    // Get roles for all users
     const { data: roles } = await supabase.from('user_roles').select('*');
     const roleMap: Record<string, string> = {};
     (roles || []).forEach(r => { roleMap[r.user_id] = r.role; });
 
-    // Get emails from auth - we need to join with profiles
-    // Since we can't directly query auth.users, we'll use the profile data
     return (profiles || []).map(p => ({
       id: p.id,
-      email: '', // Email comes from auth, we'll need to get it differently
+      email: p.email || '',
       name: p.name || '',
       phone: p.phone || undefined,
       role: (roleMap[p.id] as 'ADMIN' | 'STAFF') || 'STAFF',

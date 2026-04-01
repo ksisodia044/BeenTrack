@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import type { AppUser, UserRole } from '@/types';
-import type { User, Session } from '@supabase/supabase-js';
+import type { User } from '@supabase/supabase-js';
+
+const PROFILE_SETUP_ERROR = 'Your account setup is incomplete. Please retry or contact an administrator.';
 
 interface AuthState {
   user: AppUser | null;
@@ -9,69 +11,109 @@ interface AuthState {
   isAdmin: boolean;
   isAuthenticated: boolean;
   loading: boolean;
+  authError: string | null;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (data: Partial<AppUser>) => Promise<void>;
+  retryHydration: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
-async function fetchAppUser(authUser: User): Promise<AppUser | null> {
+async function fetchAppUser(authUser: User): Promise<{ user: AppUser | null; error: string | null }> {
   const [profileRes, roleRes] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', authUser.id).single(),
     supabase.from('user_roles').select('role').eq('user_id', authUser.id).single(),
   ]);
 
-  if (profileRes.error || !profileRes.data) return null;
+  if (profileRes.error || !profileRes.data) {
+    return { user: null, error: PROFILE_SETUP_ERROR };
+  }
 
   const profile = profileRes.data;
   const role = (roleRes.data?.role as UserRole) ?? 'STAFF';
 
   return {
-    id: authUser.id,
-    email: authUser.email ?? '',
-    name: profile.name ?? '',
-    phone: profile.phone ?? undefined,
-    role,
-    isActive: profile.is_active ?? true,
-    createdAt: profile.created_at ?? '',
+    user: {
+      id: authUser.id,
+      email: profile.email || authUser.email || '',
+      name: profile.name ?? '',
+      phone: profile.phone ?? undefined,
+      role,
+      isActive: profile.is_active ?? true,
+      createdAt: profile.created_at ?? '',
+    },
+    error: null,
   };
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
+  const [sessionUser, setSessionUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const clearAuthState = useCallback(() => {
+    setUser(null);
+    setSessionUser(null);
+    setAuthError(null);
+  }, []);
+
+  const hydrateUser = useCallback(async (authUser: User) => {
+    setLoading(true);
+    setSessionUser(authUser);
+
+    try {
+      const { user: appUser, error } = await fetchAppUser(authUser);
+      setUser(appUser);
+      setAuthError(error);
+    } catch {
+      setUser(null);
+      setAuthError(PROFILE_SETUP_ERROR);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const retryHydration = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+
+    if (session?.user) {
+      await hydrateUser(session.user);
+      return;
+    }
+
+    clearAuthState();
+    setLoading(false);
+  }, [clearAuthState, hydrateUser]);
 
   useEffect(() => {
-    // Set up auth state listener BEFORE checking session
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      (_event, session) => {
         if (session?.user) {
-          // Use setTimeout to avoid Supabase deadlock during callback
-          setTimeout(async () => {
-            const appUser = await fetchAppUser(session.user);
-            setUser(appUser);
-            setLoading(false);
+          setTimeout(() => {
+            void hydrateUser(session.user);
           }, 0);
         } else {
-          setUser(null);
+          clearAuthState();
           setLoading(false);
         }
       }
     );
 
-    // Check existing session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        const appUser = await fetchAppUser(session.user);
-        setUser(appUser);
+        void hydrateUser(session.user);
+        return;
       }
+
+      clearAuthState();
       setLoading(false);
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [clearAuthState, hydrateUser]);
 
   const login = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -89,8 +131,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
-    setUser(null);
-  }, []);
+    clearAuthState();
+  }, [clearAuthState]);
 
   const updateProfile = useCallback(async (data: Partial<AppUser>) => {
     if (!user) return;
@@ -106,8 +148,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{
-      user, role, isAdmin: role === 'ADMIN', isAuthenticated: !!user, loading,
-      login, signup, logout, updateProfile,
+      user,
+      role,
+      isAdmin: role === 'ADMIN',
+      isAuthenticated: !!sessionUser,
+      loading,
+      authError,
+      login,
+      signup,
+      logout,
+      updateProfile,
+      retryHydration,
     }}>
       {!loading && children}
     </AuthContext.Provider>
