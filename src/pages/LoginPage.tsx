@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
+import { BrandMark } from '@/components/BrandMark';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -34,9 +35,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center text-primary-foreground font-bold text-xl mx-auto mb-4">
-            B
-          </div>
+          <BrandMark className="mx-auto mb-4" />
           <h1 className="text-2xl font-bold text-foreground">Welcome back</h1>
           <p className="text-sm text-muted-foreground mt-1">Sign in to your BeanTrack account</p>
         </div>
@@ -71,6 +70,10 @@ export default function LoginPage() {
         <p className="text-center text-sm text-muted-foreground mt-4">
           Don't have an account?{' '}
           <Link to="/signup" className="text-primary font-medium hover:underline">Sign up</Link>
+        </p>
+        <p className="text-center text-sm text-muted-foreground mt-2">
+          Just reviewing the UI?{' '}
+          <Link to="/preview" className="text-primary font-medium hover:underline">Open preview mode</Link>
         </p>
       </div>
     </div>

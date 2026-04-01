@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { ReceiptPreview } from '@/components/ReceiptPreview';
 import { Skeleton } from '@/components/ui/skeleton';
 import { salesApi } from '@/api/client';
+import { appPath } from '@/lib/preview';
 import type { Sale } from '@/types';
 
 export default function SaleDetailPage() {
@@ -22,14 +23,14 @@ export default function SaleDetailPage() {
   if (!sale) return (
     <div className="text-center py-16">
       <p className="text-muted-foreground">Sale not found</p>
-      <Button variant="ghost" onClick={() => navigate('/sales/history')} className="mt-4">Go back</Button>
+      <Button variant="ghost" onClick={() => navigate(appPath('/sales/history'))} className="mt-4">Go back</Button>
     </div>
   );
 
   return (
     <div className="max-w-md mx-auto space-y-6 py-4">
       <div className="flex items-center justify-between">
-        <Button variant="ghost" size="sm" onClick={() => navigate('/sales/history')}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(appPath('/sales/history'))}>
           <ArrowLeft className="w-4 h-4 mr-1" /> Back
         </Button>
         <Button variant="outline" size="sm" onClick={() => window.print()}>

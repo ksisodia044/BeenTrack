@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { dashboardApi } from '@/api/client';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
+import { appPath } from '@/lib/preview';
 import type { DashboardSummary } from '@/types';
 
 export default function DashboardPage() {
@@ -68,7 +69,7 @@ export default function DashboardPage() {
           <p className="text-sm text-muted-foreground">Overview of your business</p>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => navigate('/sales')}>
+          <Button size="sm" onClick={() => navigate(appPath('/sales'))}>
             <ShoppingCart className="w-4 h-4 mr-1" /> New Sale
           </Button>
         </div>
@@ -110,14 +111,14 @@ export default function DashboardPage() {
         <div className="bg-card p-5 rounded-2xl shadow-soft">
           <h3 className="text-sm font-semibold text-foreground mb-4">Quick Actions</h3>
           <div className="space-y-2">
-            <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/sales')}>
+            <Button variant="outline" className="w-full justify-start" onClick={() => navigate(appPath('/sales'))}>
               <ShoppingCart className="w-4 h-4 mr-2" /> New Sale
             </Button>
-            <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/products')}>
+            <Button variant="outline" className="w-full justify-start" onClick={() => navigate(appPath('/products'))}>
               <Plus className="w-4 h-4 mr-2" /> Add Product
             </Button>
             {isAdmin && (
-              <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/suppliers')}>
+              <Button variant="outline" className="w-full justify-start" onClick={() => navigate(appPath('/suppliers'))}>
                 <Plus className="w-4 h-4 mr-2" /> Add Supplier
               </Button>
             )}
@@ -129,7 +130,7 @@ export default function DashboardPage() {
       <div className="bg-card p-5 rounded-2xl shadow-soft">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-foreground">Low Stock Items</h3>
-          <Button variant="ghost" size="sm" onClick={() => navigate('/alerts/low-stock')}>
+          <Button variant="ghost" size="sm" onClick={() => navigate(appPath('/alerts/low-stock'))}>
             View all
           </Button>
         </div>

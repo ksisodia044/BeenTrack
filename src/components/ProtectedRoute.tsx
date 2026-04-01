@@ -1,6 +1,7 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
+import { appPath } from '@/lib/preview';
 
 interface Props {
   children: React.ReactNode;
@@ -26,6 +27,6 @@ export function ProtectedRoute({ children, adminOnly }: Props) {
   }
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (adminOnly && !isAdmin) return <Navigate to="/dashboard" replace />;
+  if (adminOnly && !isAdmin) return <Navigate to={appPath('/dashboard')} replace />;
   return <>{children}</>;
 }

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { salesApi } from '@/api/client';
 import { toast } from '@/hooks/use-toast';
+import { appPath } from '@/lib/preview';
 import type { Sale } from '@/types';
 
 export default function SalesHistoryPage() {
@@ -79,7 +80,7 @@ export default function SalesHistoryPage() {
         searchValue={search}
         onSearchChange={v => { setSearch(v); setPage(1); }}
         searchPlaceholder="Search by receipt # or cashier..."
-        onRowClick={s => navigate(`/sales/${s.id}`)}
+        onRowClick={s => navigate(appPath(`/sales/${s.id}`))}
         emptyIcon={<History className="w-12 h-12" />}
         emptyMessage="No sales found"
       />

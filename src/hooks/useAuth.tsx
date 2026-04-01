@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { supabase } from '@/integrations/supabase/client';
 import type { AppUser, UserRole } from '@/types';
 import type { User } from '@supabase/supabase-js';
+import { getPreviewRole, getPreviewUser, isPreviewMode } from '@/lib/preview';
 
 const PROFILE_SETUP_ERROR = 'Your account setup is incomplete. Please retry or contact an administrator.';
 
@@ -48,10 +49,13 @@ async function fetchAppUser(authUser: User): Promise<{ user: AppUser | null; err
   };
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children, pathname }: { children: React.ReactNode; pathname?: string }) {
+  const previewPath = pathname ?? (typeof window !== 'undefined' ? window.location.pathname : '');
+  const previewMode = isPreviewMode(previewPath);
+  const previewRole = getPreviewRole(previewPath);
   const [user, setUser] = useState<AppUser | null>(null);
   const [sessionUser, setSessionUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!previewMode);
   const [authError, setAuthError] = useState<string | null>(null);
 
   const clearAuthState = useCallback(() => {
@@ -77,6 +81,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const retryHydration = useCallback(async () => {
+    if (previewMode) {
+      setUser(getPreviewUser(previewRole));
+      setAuthError(null);
+      setLoading(false);
+      return;
+    }
+
     const { data: { session } } = await supabase.auth.getSession();
 
     if (session?.user) {
@@ -86,9 +97,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     clearAuthState();
     setLoading(false);
-  }, [clearAuthState, hydrateUser]);
+  }, [clearAuthState, hydrateUser, previewMode, previewRole]);
 
   useEffect(() => {
+    if (previewMode) {
+      setUser(getPreviewUser(previewRole));
+      setSessionUser(null);
+      setAuthError(null);
+      setLoading(false);
+      return;
+    }
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         if (session?.user) {
@@ -113,28 +132,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => subscription.unsubscribe();
-  }, [clearAuthState, hydrateUser]);
+  }, [clearAuthState, hydrateUser, previewMode, previewRole]);
 
   const login = useCallback(async (email: string, password: string) => {
+    if (previewMode) return;
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-  }, []);
+  }, [previewMode]);
 
   const signup = useCallback(async (email: string, password: string, name: string) => {
+    if (previewMode) return;
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: { data: { name } },
     });
     if (error) throw error;
-  }, []);
+  }, [previewMode]);
 
   const logout = useCallback(async () => {
+    if (previewMode) {
+      setUser(getPreviewUser(previewRole));
+      setAuthError(null);
+      return;
+    }
+
     await supabase.auth.signOut();
     clearAuthState();
-  }, [clearAuthState]);
+  }, [clearAuthState, previewMode, previewRole]);
 
   const updateProfile = useCallback(async (data: Partial<AppUser>) => {
+    if (previewMode) {
+      setUser(prev => prev ? { ...prev, ...data } : prev);
+      return;
+    }
+
     if (!user) return;
     const { error } = await supabase
       .from('profiles')
@@ -142,7 +174,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('id', user.id);
     if (error) throw error;
     setUser(prev => prev ? { ...prev, ...data } : prev);
-  }, [user]);
+  }, [previewMode, user]);
 
   const role = user?.role ?? null;
 
@@ -151,7 +183,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       role,
       isAdmin: role === 'ADMIN',
-      isAuthenticated: !!sessionUser,
+      isAuthenticated: previewMode || !!sessionUser,
       loading,
       authError,
       login,

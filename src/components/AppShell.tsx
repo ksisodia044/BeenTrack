@@ -5,6 +5,8 @@ import {
   AlertTriangle, Settings, History, LogOut, Menu, X,
 } from 'lucide-react';
 import { useState } from 'react';
+import { appPath, isPreviewMode } from '@/lib/preview';
+import { BrandMark } from '@/components/BrandMark';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -21,22 +23,23 @@ export function AppShell() {
   const { user, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const previewMode = isPreviewMode();
 
   const visibleNav = navigation.filter(n => !n.adminOnly || isAdmin);
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate(previewMode ? '/preview' : '/login');
   };
 
   const sidebarContent = (
     <>
       <div className="p-5">
         <div className="flex items-center gap-2.5 px-2">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground font-bold text-sm">
-            B
-          </div>
-          <span className="font-semibold text-foreground tracking-tight text-base">BeanTrack</span>
+          <BrandMark size="sm" />
+          <span className="font-semibold text-foreground tracking-tight text-base">
+            BeanTrack{previewMode ? ' Preview' : ''}
+          </span>
         </div>
       </div>
 
@@ -44,7 +47,7 @@ export function AppShell() {
         {visibleNav.map((item) => (
           <NavLink
             key={item.name}
-            to={item.href}
+            to={appPath(item.href)}
             onClick={() => setMobileOpen(false)}
             end={item.href === '/sales'}
             className={({ isActive }) =>

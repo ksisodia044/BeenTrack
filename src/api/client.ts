@@ -4,6 +4,10 @@ import type {
   ReportSummary, TopProduct, AppUser, BusinessSettings,
   PaginatedResponse,
 } from '@/types';
+import {
+  mockProducts, mockSuppliers, mockSales, mockUsers, mockBusinessSettings,
+} from '@/mocks/data';
+import { isPreviewMode } from '@/lib/preview';
 
 // ── Helpers ───────────────────────────────────────────
 function toProduct(row: any, supplierName?: string): Product {
@@ -65,9 +69,131 @@ function toSaleItem(row: any): SaleItem {
   };
 }
 
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const previewState = {
+  products: clone(mockProducts),
+  suppliers: clone(mockSuppliers),
+  sales: clone(mockSales),
+  users: clone(mockUsers),
+  businessSettings: clone(mockBusinessSettings),
+};
+
+let previewReceiptSequence = 2000;
+
+function paginate<T>(rows: T[], page = 1, pageSize = 10): PaginatedResponse<T> {
+  const from = (page - 1) * pageSize;
+  return {
+    data: rows.slice(from, from + pageSize),
+    total: rows.length,
+    page,
+    pageSize,
+  };
+}
+
+function previewSuppliersWithCounts() {
+  return previewState.suppliers.map((supplier) => ({
+    ...supplier,
+    productsCount: previewState.products.filter((product) => product.supplierId === supplier.id).length,
+  }));
+}
+
+function previewLowStockRows() {
+  return previewState.products
+    .filter((product) => product.status === 'active' && product.stockQty <= product.reorderLevel)
+    .sort((left, right) => left.stockQty - right.stockQty);
+}
+
+function previewDashboardSummary(): DashboardSummary {
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const weekStart = new Date(todayStart);
+  weekStart.setDate(weekStart.getDate() - 6);
+
+  const salesToday = previewState.sales.filter((sale) => new Date(sale.createdAt) >= todayStart);
+  const salesThisWeek = previewState.sales.filter((sale) => new Date(sale.createdAt) >= weekStart);
+  const lowStock = previewLowStockRows();
+
+  const salesTrend = Array.from({ length: 7 }, (_, index) => {
+    const dayStart = new Date(weekStart);
+    dayStart.setDate(weekStart.getDate() + index);
+    dayStart.setHours(0, 0, 0, 0);
+
+    const dayEnd = new Date(dayStart);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    return {
+      date: dayStart.toLocaleDateString('en-US', { weekday: 'short' }),
+      amount: +salesThisWeek
+        .filter((sale) => {
+          const createdAt = new Date(sale.createdAt);
+          return createdAt >= dayStart && createdAt <= dayEnd;
+        })
+        .reduce((sum, sale) => sum + sale.total, 0)
+        .toFixed(2),
+    };
+  });
+
+  return {
+    totalSalesToday: +salesToday.reduce((sum, sale) => sum + sale.total, 0).toFixed(2),
+    salesThisWeek: +salesThisWeek.reduce((sum, sale) => sum + sale.total, 0).toFixed(2),
+    lowStockCount: lowStock.length,
+    totalProducts: previewState.products.filter((product) => product.status === 'active').length,
+    totalSuppliers: previewState.suppliers.length,
+    salesTrend,
+    topLowStock: clone(lowStock.slice(0, 5)),
+  };
+}
+
+function previewTopProducts(): TopProduct[] {
+  const productTotals = new Map<string, TopProduct>();
+
+  previewState.sales.forEach((sale) => {
+    sale.items.forEach((item) => {
+      const existing = productTotals.get(item.productId);
+      if (existing) {
+        existing.totalQty += item.qty;
+        existing.totalRevenue = +(existing.totalRevenue + item.lineTotal).toFixed(2);
+        return;
+      }
+
+      productTotals.set(item.productId, {
+        productId: item.productId,
+        name: item.name,
+        totalQty: item.qty,
+        totalRevenue: item.lineTotal,
+      });
+    });
+  });
+
+  return Array.from(productTotals.values())
+    .sort((left, right) => right.totalRevenue - left.totalRevenue)
+    .slice(0, 10);
+}
+
 // ── Products ──────────────────────────────────────────
 export const productsApi = {
   list: async (params?: { search?: string; category?: string; status?: string; page?: number; pageSize?: number }): Promise<PaginatedResponse<Product>> => {
+    if (isPreviewMode()) {
+      const filtered = previewState.products.filter((product) => {
+        const matchesSearch = !params?.search
+          || product.name.toLowerCase().includes(params.search.toLowerCase())
+          || product.sku.toLowerCase().includes(params.search.toLowerCase());
+        const matchesCategory = !params?.category || product.category === params.category;
+        const matchesStatus = !params?.status || product.status === params.status;
+        return matchesSearch && matchesCategory && matchesStatus;
+      });
+
+      return paginate(
+        clone(filtered).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+        params?.page || 1,
+        params?.pageSize || 10,
+      );
+    }
+
     const page = params?.page || 1;
     const pageSize = params?.pageSize || 10;
     const from = (page - 1) * pageSize;
@@ -93,6 +219,27 @@ export const productsApi = {
   },
 
   create: async (data: Partial<Product>): Promise<Product> => {
+    if (isPreviewMode()) {
+      const product: Product = {
+        id: `prod-${Date.now()}`,
+        sku: data.sku || `SKU-${Date.now()}`,
+        name: data.name || 'Preview Product',
+        category: data.category || 'General',
+        unit: data.unit || 'pcs',
+        costPrice: data.costPrice || 0,
+        sellingPrice: data.sellingPrice || 0,
+        stockQty: data.stockQty || 0,
+        reorderLevel: data.reorderLevel || 5,
+        supplierId: data.supplierId,
+        supplierName: previewState.suppliers.find((supplier) => supplier.id === data.supplierId)?.name,
+        status: data.status || 'active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      previewState.products.unshift(product);
+      return clone(product);
+    }
+
     const { data: row, error } = await supabase.from('products').insert({
       sku: data.sku!,
       name: data.name!,
@@ -110,6 +257,23 @@ export const productsApi = {
   },
 
   update: async (id: string, data: Partial<Product>): Promise<Product> => {
+    if (isPreviewMode()) {
+      const index = previewState.products.findIndex((product) => product.id === id);
+      if (index === -1) throw new Error('Product not found');
+
+      const updated = {
+        ...previewState.products[index],
+        ...data,
+        supplierName: data.supplierId === undefined
+          ? previewState.products[index].supplierName
+          : previewState.suppliers.find((supplier) => supplier.id === data.supplierId)?.name,
+        updatedAt: new Date().toISOString(),
+      };
+
+      previewState.products[index] = updated;
+      return clone(updated);
+    }
+
     const updates: any = {};
     if (data.name !== undefined) updates.name = data.name;
     if (data.sku !== undefined) updates.sku = data.sku;
@@ -128,6 +292,14 @@ export const productsApi = {
   },
 
   delete: async (id: string): Promise<void> => {
+    if (isPreviewMode()) {
+      const product = previewState.products.find((entry) => entry.id === id);
+      if (!product) throw new Error('Product not found');
+      product.status = 'inactive';
+      product.updatedAt = new Date().toISOString();
+      return;
+    }
+
     const { error } = await supabase.from('products').update({ status: 'inactive' }).eq('id', id);
     if (error) throw error;
   },
@@ -136,6 +308,20 @@ export const productsApi = {
 // ── Suppliers ─────────────────────────────────────────
 export const suppliersApi = {
   list: async (params?: { search?: string; page?: number; pageSize?: number }): Promise<PaginatedResponse<Supplier>> => {
+    if (isPreviewMode()) {
+      const filtered = previewSuppliersWithCounts().filter((supplier) => {
+        if (!params?.search) return true;
+        const search = params.search.toLowerCase();
+        return supplier.name.toLowerCase().includes(search) || supplier.contactPerson.toLowerCase().includes(search);
+      });
+
+      return paginate(
+        clone(filtered).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+        params?.page || 1,
+        params?.pageSize || 10,
+      );
+    }
+
     const page = params?.page || 1;
     const pageSize = params?.pageSize || 10;
     const from = (page - 1) * pageSize;
@@ -173,6 +359,22 @@ export const suppliersApi = {
   },
 
   create: async (data: Partial<Supplier>): Promise<Supplier> => {
+    if (isPreviewMode()) {
+      const supplier: Supplier = {
+        id: `sup-${Date.now()}`,
+        name: data.name || 'Preview Supplier',
+        contactPerson: data.contactPerson || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        location: data.location || '',
+        notes: data.notes || '',
+        productsCount: 0,
+        createdAt: new Date().toISOString(),
+      };
+      previewState.suppliers.unshift(supplier);
+      return clone(supplier);
+    }
+
     const { data: row, error } = await supabase.from('suppliers').insert({
       name: data.name!,
       contact_person: data.contactPerson || '',
@@ -186,6 +388,21 @@ export const suppliersApi = {
   },
 
   update: async (id: string, data: Partial<Supplier>): Promise<Supplier> => {
+    if (isPreviewMode()) {
+      const index = previewState.suppliers.findIndex((supplier) => supplier.id === id);
+      if (index === -1) throw new Error('Supplier not found');
+
+      previewState.suppliers[index] = {
+        ...previewState.suppliers[index],
+        ...data,
+      };
+
+      return clone({
+        ...previewState.suppliers[index],
+        productsCount: previewState.products.filter((product) => product.supplierId === id).length,
+      });
+    }
+
     const updates: any = {};
     if (data.name !== undefined) updates.name = data.name;
     if (data.contactPerson !== undefined) updates.contact_person = data.contactPerson;
@@ -203,6 +420,59 @@ export const suppliersApi = {
 // ── Sales ─────────────────────────────────────────────
 export const salesApi = {
   create: async (data: { items: { productId: string; qty: number }[]; paymentMethod: string; discount?: number; cashierName: string; cashierId: string; taxRate?: number }): Promise<Sale> => {
+    if (isPreviewMode()) {
+      const products = data.items.map((item) => {
+        const product = previewState.products.find((entry) => entry.id === item.productId);
+        if (!product) {
+          throw new Error('Product not found');
+        }
+        if (product.stockQty < item.qty) {
+          throw new Error(`Insufficient stock for ${product.name}`);
+        }
+        return product;
+      });
+
+      const saleItems = data.items.map((item, index) => {
+        const product = products[index];
+        return {
+          productId: product.id,
+          name: product.name,
+          unitPrice: product.sellingPrice,
+          qty: item.qty,
+          lineTotal: +(product.sellingPrice * item.qty).toFixed(2),
+        };
+      });
+
+      const subtotal = +saleItems.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2);
+      const discount = data.discount || 0;
+      const taxRate = data.taxRate ?? previewState.businessSettings.defaultTaxRate;
+      const tax = +(((subtotal - discount) * taxRate) / 100).toFixed(2);
+      const total = +(subtotal - discount + tax).toFixed(2);
+
+      data.items.forEach((item) => {
+        const product = previewState.products.find((entry) => entry.id === item.productId)!;
+        product.stockQty -= item.qty;
+        product.updatedAt = new Date().toISOString();
+      });
+
+      const sale: Sale = {
+        id: `sale-${Date.now()}`,
+        receiptNo: `PRV-${previewReceiptSequence++}`,
+        createdAt: new Date().toISOString(),
+        cashierName: data.cashierName,
+        cashierId: data.cashierId,
+        paymentMethod: data.paymentMethod as Sale['paymentMethod'],
+        subtotal,
+        discount,
+        tax,
+        total,
+        items: saleItems,
+      };
+
+      previewState.sales.unshift(sale);
+      return clone(sale);
+    }
+
     // Build items with product info
     const { data: products, error: prodErr } = await supabase
       .from('products')
@@ -262,6 +532,24 @@ export const salesApi = {
   },
 
   list: async (params?: { from?: string; to?: string; search?: string; page?: number; pageSize?: number }): Promise<PaginatedResponse<Sale>> => {
+    if (isPreviewMode()) {
+      const filtered = previewState.sales.filter((sale) => {
+        const matchesSearch = !params?.search
+          || sale.receiptNo.toLowerCase().includes(params.search.toLowerCase())
+          || sale.cashierName.toLowerCase().includes(params.search.toLowerCase());
+        const createdAt = new Date(sale.createdAt).toISOString();
+        const matchesFrom = !params?.from || createdAt >= params.from;
+        const matchesTo = !params?.to || createdAt <= params.to;
+        return matchesSearch && matchesFrom && matchesTo;
+      });
+
+      return paginate(
+        clone(filtered).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+        params?.page || 1,
+        params?.pageSize || 10,
+      );
+    }
+
     const page = params?.page || 1;
     const pageSize = params?.pageSize || 10;
     const from = (page - 1) * pageSize;
@@ -298,6 +586,12 @@ export const salesApi = {
   },
 
   getById: async (id: string): Promise<Sale> => {
+    if (isPreviewMode()) {
+      const sale = previewState.sales.find((entry) => entry.id === id);
+      if (!sale) throw new Error('Sale not found');
+      return clone(sale);
+    }
+
     const { data: row, error } = await supabase.from('sales').select('*').eq('id', id).single();
     if (error) throw error;
 
@@ -309,6 +603,22 @@ export const salesApi = {
 // ── Reports ───────────────────────────────────────────
 export const reportsApi = {
   summary: async (params?: { from?: string; to?: string }): Promise<ReportSummary> => {
+    if (isPreviewMode()) {
+      const sales = previewState.sales.filter((sale) => {
+        const createdAt = new Date(sale.createdAt).toISOString();
+        const matchesFrom = !params?.from || createdAt >= params.from;
+        const matchesTo = !params?.to || createdAt <= params.to;
+        return matchesFrom && matchesTo;
+      });
+
+      const totalRevenue = sales.reduce((sum, sale) => sum + sale.total, 0);
+      return {
+        totalRevenue: +totalRevenue.toFixed(2),
+        transactionCount: sales.length,
+        averageSale: sales.length ? +(totalRevenue / sales.length).toFixed(2) : 0,
+      };
+    }
+
     let query = supabase.from('sales').select('total');
     if (params?.from) query = query.gte('created_at', params.from);
     if (params?.to) query = query.lte('created_at', params.to);
@@ -326,6 +636,36 @@ export const reportsApi = {
   },
 
   topProducts: async (params?: { from?: string; to?: string }): Promise<TopProduct[]> => {
+    if (isPreviewMode()) {
+      const sales = previewState.sales.filter((sale) => {
+        const createdAt = new Date(sale.createdAt).toISOString();
+        const matchesFrom = !params?.from || createdAt >= params.from;
+        const matchesTo = !params?.to || createdAt <= params.to;
+        return matchesFrom && matchesTo;
+      });
+
+      const productTotals = new Map<string, TopProduct>();
+      sales.forEach((sale) => {
+        sale.items.forEach((item) => {
+          const existing = productTotals.get(item.productId);
+          if (existing) {
+            existing.totalQty += item.qty;
+            existing.totalRevenue = +(existing.totalRevenue + item.lineTotal).toFixed(2);
+            return;
+          }
+
+          productTotals.set(item.productId, {
+            productId: item.productId,
+            name: item.name,
+            totalQty: item.qty,
+            totalRevenue: item.lineTotal,
+          });
+        });
+      });
+
+      return Array.from(productTotals.values()).sort((left, right) => right.totalRevenue - left.totalRevenue).slice(0, 10);
+    }
+
     // Get sale items with date filtering through sales
     let salesQuery = supabase.from('sales').select('id, created_at');
     if (params?.from) salesQuery = salesQuery.gte('created_at', params.from);
@@ -358,6 +698,10 @@ export const reportsApi = {
   },
 
   lowStock: async (): Promise<Product[]> => {
+    if (isPreviewMode()) {
+      return clone(previewLowStockRows());
+    }
+
     const { data, error } = await supabase
       .from('products')
       .select('*, suppliers(name)')
@@ -374,6 +718,10 @@ export const reportsApi = {
 // ── Dashboard ─────────────────────────────────────────
 export const dashboardApi = {
   summary: async (): Promise<DashboardSummary> => {
+    if (isPreviewMode()) {
+      return previewDashboardSummary();
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const weekAgo = new Date(today);
@@ -431,6 +779,10 @@ export const dashboardApi = {
 // ── Users (admin) ─────────────────────────────────────
 export const usersApi = {
   list: async (): Promise<AppUser[]> => {
+    if (isPreviewMode()) {
+      return clone(previewState.users);
+    }
+
     const { data: profiles, error } = await supabase
       .from('profiles')
       .select('id, name, phone, is_active, created_at, email');
@@ -452,6 +804,13 @@ export const usersApi = {
   },
 
   updateRole: async (userId: string, role: 'ADMIN' | 'STAFF'): Promise<void> => {
+    if (isPreviewMode()) {
+      const user = previewState.users.find((entry) => entry.id === userId);
+      if (!user) throw new Error('User not found');
+      user.role = role;
+      return;
+    }
+
     // The UI assumes one role row per user, so replace all existing role rows first.
     const { error: deleteError } = await supabase.from('user_roles')
       .delete()
@@ -464,6 +823,13 @@ export const usersApi = {
   },
 
   updateStatus: async (userId: string, isActive: boolean): Promise<void> => {
+    if (isPreviewMode()) {
+      const user = previewState.users.find((entry) => entry.id === userId);
+      if (!user) throw new Error('User not found');
+      user.isActive = isActive;
+      return;
+    }
+
     const { error } = await supabase.from('profiles')
       .update({ is_active: isActive })
       .eq('id', userId);
@@ -474,6 +840,10 @@ export const usersApi = {
 // ── Settings ──────────────────────────────────────────
 export const settingsApi = {
   getBusinessSettings: async (): Promise<BusinessSettings> => {
+    if (isPreviewMode()) {
+      return clone(previewState.businessSettings);
+    }
+
     const { data, error } = await supabase.from('business_settings').select('*').limit(1).single();
     if (error) throw error;
     return {
@@ -484,6 +854,14 @@ export const settingsApi = {
   },
 
   updateBusinessSettings: async (settings: Partial<BusinessSettings>): Promise<BusinessSettings> => {
+    if (isPreviewMode()) {
+      previewState.businessSettings = {
+        ...previewState.businessSettings,
+        ...settings,
+      };
+      return clone(previewState.businessSettings);
+    }
+
     const updates: any = {};
     if (settings.businessName !== undefined) updates.business_name = settings.businessName;
     if (settings.receiptFooter !== undefined) updates.receipt_footer = settings.receiptFooter;
