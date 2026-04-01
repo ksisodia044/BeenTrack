@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Package, Users, AlertTriangle, ShoppingCart, Plus, TrendingUp } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -7,6 +7,7 @@ import { StockBadge } from '@/components/StockBadge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { dashboardApi } from '@/api/client';
+import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import type { DashboardSummary } from '@/types';
 
@@ -16,12 +17,23 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    dashboardApi.summary()
-      .then(setData)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+  const loadSummary = useCallback(async () => {
+    setLoading(true);
+
+    try {
+      const summary = await dashboardApi.summary();
+      setData(summary);
+    } catch {
+      setData(null);
+      toast({ title: 'Failed to load dashboard', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
 
   if (loading) {
     return (
@@ -36,7 +48,17 @@ export default function DashboardPage() {
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div className="rounded-2xl bg-card p-6 shadow-soft">
+        <h1 className="text-xl font-bold text-foreground">Dashboard</h1>
+        <p className="mt-2 text-sm text-muted-foreground">The dashboard could not be loaded.</p>
+        <Button variant="outline" className="mt-4" onClick={() => void loadSummary()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -122,7 +144,7 @@ export default function DashboardPage() {
               <div key={p.id} className="flex items-center justify-between py-2.5">
                 <div>
                   <p className="text-sm font-medium text-foreground">{p.name}</p>
-                  <p className="text-xs text-muted-foreground">{p.sku} · {p.category}</p>
+                  <p className="text-xs text-muted-foreground">{p.sku} - {p.category}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-sm tabular-nums text-foreground">{p.stockQty} / {p.reorderLevel}</span>

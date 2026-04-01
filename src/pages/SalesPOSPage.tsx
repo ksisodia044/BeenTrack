@@ -1,12 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Minus, Trash2, CreditCard, Banknote, Smartphone, ShoppingCart, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { productsApi, salesApi } from '@/api/client';
+import { productsApi, salesApi, settingsApi } from '@/api/client';
 import { ReceiptPreview } from '@/components/ReceiptPreview';
-import { StockBadge } from '@/components/StockBadge';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import type { Product, CartItem, Sale } from '@/types';
+
+function formatTaxRate(rate: number) {
+  const roundedRate = Number.isInteger(rate) ? rate.toFixed(0) : rate.toFixed(2);
+  return roundedRate.replace(/\.00$/, '');
+}
 
 export default function SalesPOSPage() {
   const { user } = useAuth();
@@ -16,76 +20,140 @@ export default function SalesPOSPage() {
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile_money'>('cash');
   const [processing, setProcessing] = useState(false);
   const [completedSale, setCompletedSale] = useState<Sale | null>(null);
+  const [productsLoading, setProductsLoading] = useState(true);
+  const [productsError, setProductsError] = useState<string | null>(null);
+  const [taxRate, setTaxRate] = useState<number | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+
+  const loadProducts = useCallback(async () => {
+    setProductsLoading(true);
+    setProductsError(null);
+
+    try {
+      const response = await productsApi.list({ pageSize: 999 });
+      setProducts(response.data.filter(product => product.status === 'active'));
+    } catch {
+      setProducts([]);
+      setProductsError('Failed to load products.');
+      toast({ title: 'Failed to load products', variant: 'destructive' });
+    } finally {
+      setProductsLoading(false);
+    }
+  }, []);
+
+  const loadTaxSettings = useCallback(async () => {
+    setSettingsLoading(true);
+    setSettingsError(null);
+
+    try {
+      const businessSettings = await settingsApi.getBusinessSettings();
+      setTaxRate(businessSettings.defaultTaxRate);
+    } catch {
+      setTaxRate(null);
+      setSettingsError('Checkout unavailable because business settings could not be loaded.');
+      toast({ title: 'Failed to load business settings', variant: 'destructive' });
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    productsApi.list({ pageSize: 999 }).then(res => setProducts(res.data.filter(p => p.status === 'active')));
-  }, []);
+    void loadProducts();
+    void loadTaxSettings();
+  }, [loadProducts, loadTaxSettings]);
 
   const filtered = useMemo(() => {
     if (!search) return products;
-    const s = search.toLowerCase();
-    return products.filter(p => p.name.toLowerCase().includes(s) || p.sku.toLowerCase().includes(s));
+    const normalizedSearch = search.toLowerCase();
+    return products.filter(product => (
+      product.name.toLowerCase().includes(normalizedSearch) ||
+      product.sku.toLowerCase().includes(normalizedSearch)
+    ));
   }, [products, search]);
 
-  const addToCart = (p: Product) => {
-    setCart(prev => {
-      const existing = prev.find(ci => ci.productId === p.id);
-      if (existing) {
-        if (existing.qty >= p.stockQty) {
+  const addToCart = (product: Product) => {
+    setCart(previousCart => {
+      const existingItem = previousCart.find(item => item.productId === product.id);
+
+      if (existingItem) {
+        if (existingItem.qty >= product.stockQty) {
           toast({ title: 'Not enough stock', variant: 'destructive' });
-          return prev;
+          return previousCart;
         }
-        return prev.map(ci =>
-          ci.productId === p.id
-            ? { ...ci, qty: ci.qty + 1, lineTotal: +((ci.qty + 1) * ci.unitPrice).toFixed(2) }
-            : ci
-        );
+
+        return previousCart.map(item => (
+          item.productId === product.id
+            ? { ...item, qty: item.qty + 1, lineTotal: +((item.qty + 1) * item.unitPrice).toFixed(2) }
+            : item
+        ));
       }
-      if (p.stockQty <= 0) {
+
+      if (product.stockQty <= 0) {
         toast({ title: 'Out of stock', variant: 'destructive' });
-        return prev;
+        return previousCart;
       }
-      return [...prev, {
-        productId: p.id, name: p.name, sku: p.sku,
-        unitPrice: p.sellingPrice, qty: 1,
-        lineTotal: p.sellingPrice, maxStock: p.stockQty,
-      }];
+
+      return [
+        ...previousCart,
+        {
+          productId: product.id,
+          name: product.name,
+          sku: product.sku,
+          unitPrice: product.sellingPrice,
+          qty: 1,
+          lineTotal: product.sellingPrice,
+          maxStock: product.stockQty,
+        },
+      ];
     });
   };
 
   const updateQty = (productId: string, delta: number) => {
-    setCart(prev => prev.map(ci => {
-      if (ci.productId !== productId) return ci;
-      const newQty = Math.max(1, Math.min(ci.maxStock, ci.qty + delta));
-      return { ...ci, qty: newQty, lineTotal: +(newQty * ci.unitPrice).toFixed(2) };
+    setCart(previousCart => previousCart.map(item => {
+      if (item.productId !== productId) return item;
+
+      const nextQty = Math.max(1, Math.min(item.maxStock, item.qty + delta));
+      return {
+        ...item,
+        qty: nextQty,
+        lineTotal: +(nextQty * item.unitPrice).toFixed(2),
+      };
     }));
   };
 
   const removeItem = (productId: string) => {
-    setCart(prev => prev.filter(ci => ci.productId !== productId));
+    setCart(previousCart => previousCart.filter(item => item.productId !== productId));
   };
 
-  const subtotal = +cart.reduce((s, ci) => s + ci.lineTotal, 0).toFixed(2);
-  const tax = +((subtotal) * 0.15).toFixed(2);
+  const subtotal = +cart.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2);
+  const activeTaxRate = taxRate ?? 0;
+  const tax = +((subtotal * activeTaxRate) / 100).toFixed(2);
   const total = +(subtotal + tax).toFixed(2);
+  const checkoutDisabled = cart.length === 0 || processing || settingsLoading || !!settingsError;
 
   const handleCheckout = async () => {
-    if (cart.length === 0) return;
+    if (checkoutDisabled || taxRate === null) return;
+
     setProcessing(true);
+
     try {
       const sale = await salesApi.create({
-        items: cart.map(ci => ({ productId: ci.productId, qty: ci.qty })),
+        items: cart.map(item => ({ productId: item.productId, qty: item.qty })),
         paymentMethod,
         cashierName: user?.name || 'Unknown',
         cashierId: user?.id || '',
+        taxRate,
       });
+
       setCompletedSale(sale);
       setCart([]);
       toast({ title: 'Sale completed!' });
     } catch {
       toast({ title: 'Checkout failed', variant: 'destructive' });
+    } finally {
+      setProcessing(false);
     }
-    setProcessing(false);
   };
 
   if (completedSale) {
@@ -112,44 +180,54 @@ export default function SalesPOSPage() {
       <h1 className="text-xl font-bold text-foreground">Point of Sale</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-12rem)]">
-        {/* Product Selection */}
         <div className="lg:col-span-8 flex flex-col gap-4 min-h-0">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={event => setSearch(event.target.value)}
               className="w-full pl-10 pr-4 py-3 bg-card shadow-soft rounded-xl text-sm outline-none focus:ring-2 focus:ring-ring transition-all placeholder:text-muted-foreground"
               placeholder="Search by product name or SKU..."
             />
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 overflow-y-auto pr-1 flex-1">
-            {filtered.map(p => (
+            {productsLoading && (
+              <div className="col-span-full py-16 text-center text-muted-foreground">
+                <p className="text-sm">Loading products...</p>
+              </div>
+            )}
+
+            {!productsLoading && filtered.map(product => (
               <button
-                key={p.id}
-                onClick={() => addToCart(p)}
-                disabled={p.stockQty <= 0}
+                key={product.id}
+                onClick={() => addToCart(product)}
+                disabled={product.stockQty <= 0}
                 className="bg-card p-4 rounded-xl shadow-soft hover:shadow-card transition-all text-left group disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <span className="text-[10px] font-bold text-accent uppercase tracking-widest">{p.category}</span>
-                <h3 className="font-medium text-foreground mt-1 text-sm leading-snug">{p.name}</h3>
+                <span className="text-[10px] font-bold text-accent uppercase tracking-widest">{product.category}</span>
+                <h3 className="font-medium text-foreground mt-1 text-sm leading-snug">{product.name}</h3>
                 <div className="flex justify-between items-end mt-3">
-                  <span className="text-base font-semibold text-primary">${p.sellingPrice.toFixed(2)}</span>
-                  <span className="text-[10px] text-muted-foreground">{p.stockQty} in stock</span>
+                  <span className="text-base font-semibold text-primary">${product.sellingPrice.toFixed(2)}</span>
+                  <span className="text-[10px] text-muted-foreground">{product.stockQty} in stock</span>
                 </div>
               </button>
             ))}
-            {filtered.length === 0 && (
+
+            {!productsLoading && filtered.length === 0 && (
               <div className="col-span-full py-16 text-center text-muted-foreground">
                 <ShoppingCart className="w-10 h-10 mx-auto mb-2 opacity-10" />
-                <p className="text-sm">No products found</p>
+                <p className="text-sm">{productsError || 'No products found'}</p>
+                {productsError && (
+                  <Button variant="outline" size="sm" className="mt-3" onClick={() => void loadProducts()}>
+                    Retry
+                  </Button>
+                )}
               </div>
             )}
           </div>
         </div>
 
-        {/* Cart */}
         <div className="lg:col-span-4 bg-card rounded-2xl shadow-card flex flex-col overflow-hidden min-h-[400px] lg:min-h-0">
           <div className="p-5 border-b border-border/50">
             <h2 className="font-semibold text-foreground">Current Order</h2>
@@ -167,7 +245,7 @@ export default function SalesPOSPage() {
                 <div key={item.productId} className="flex justify-between items-center gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
-                    <p className="text-xs text-muted-foreground">${item.unitPrice.toFixed(2)} × {item.qty}</p>
+                    <p className="text-xs text-muted-foreground">${item.unitPrice.toFixed(2)} x {item.qty}</p>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button onClick={() => updateQty(item.productId, -1)} className="p-1 rounded bg-secondary hover:bg-muted">
@@ -192,39 +270,48 @@ export default function SalesPOSPage() {
               <span>Subtotal</span><span className="tabular-nums">${subtotal.toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-sm text-muted-foreground">
-              <span>Tax (15%)</span><span className="tabular-nums">${tax.toFixed(2)}</span>
+              <span>Tax ({formatTaxRate(activeTaxRate)}%)</span><span className="tabular-nums">${tax.toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-lg font-bold text-foreground pt-2 border-t border-border/50">
               <span>Total</span><span className="tabular-nums">${total.toFixed(2)}</span>
             </div>
+
+            {settingsLoading && (
+              <p className="text-xs text-muted-foreground pt-2">Loading tax settings...</p>
+            )}
+
+            {settingsError && (
+              <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                <p className="text-xs text-destructive">{settingsError}</p>
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => void loadTaxSettings()}>
+                  Retry
+                </Button>
+              </div>
+            )}
 
             <div className="grid grid-cols-3 gap-2 pt-3">
               {[
                 { value: 'cash' as const, icon: Banknote, label: 'Cash' },
                 { value: 'card' as const, icon: CreditCard, label: 'Card' },
                 { value: 'mobile_money' as const, icon: Smartphone, label: 'Mobile' },
-              ].map(pm => (
+              ].map(method => (
                 <button
-                  key={pm.value}
-                  onClick={() => setPaymentMethod(pm.value)}
+                  key={method.value}
+                  onClick={() => setPaymentMethod(method.value)}
                   className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                    paymentMethod === pm.value
+                    paymentMethod === method.value
                       ? 'bg-primary text-primary-foreground shadow-soft'
                       : 'bg-card border border-border hover:bg-secondary'
                   }`}
                 >
-                  <pm.icon className="w-4 h-4" />
-                  {pm.label}
+                  <method.icon className="w-4 h-4" />
+                  {method.label}
                 </button>
               ))}
             </div>
 
-            <Button
-              className="w-full mt-2"
-              disabled={cart.length === 0 || processing}
-              onClick={handleCheckout}
-            >
-              {processing ? 'Processing...' : `Checkout $${total.toFixed(2)}`}
+            <Button className="w-full mt-2" disabled={checkoutDisabled} onClick={() => void handleCheckout()}>
+              {processing ? 'Processing...' : settingsError ? 'Checkout unavailable' : settingsLoading ? 'Loading tax settings...' : `Checkout $${total.toFixed(2)}`}
             </Button>
           </div>
         </div>
