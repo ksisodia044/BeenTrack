@@ -28,6 +28,10 @@ vi.mock('@/api/client', () => ({
   },
 }));
 
+vi.mock('@/hooks/use-toast', () => ({
+  toast: vi.fn(),
+}));
+
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   BarChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,

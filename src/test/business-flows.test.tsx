@@ -101,10 +101,12 @@ let authState = {
   isAdmin: true,
   isAuthenticated: true,
   loading: false,
+  authError: null as string | null,
   login: vi.fn(),
   signup: vi.fn(),
   logout: vi.fn(),
   updateProfile: updateProfileMock,
+  retryHydration: vi.fn(),
 };
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -201,10 +203,12 @@ describe("business flows and failure paths", () => {
       isAdmin: true,
       isAuthenticated: true,
       loading: false,
+      authError: null,
       login: vi.fn(),
       signup: vi.fn(),
       logout: vi.fn(),
       updateProfile: updateProfileMock,
+      retryHydration: vi.fn(),
     };
 
     productsListMock.mockResolvedValue({ data: [], total: 0, page: 1, pageSize: 10 });
@@ -378,7 +382,7 @@ describe("business flows and failure paths", () => {
     });
   });
 
-  it("covers point of sale empty states, insufficient stock, checkout success, and checkout failure", async () => {
+  it("covers point of sale empty states, dynamic tax, checkout success, and checkout failure", async () => {
     render(
       <MemoryRouter>
         <SalesPOSPage />
@@ -388,8 +392,14 @@ describe("business flows and failure paths", () => {
     expect(await screen.findByRole("heading", { name: "Point of Sale" })).toBeInTheDocument();
     expect(screen.getByText("No products found")).toBeInTheDocument();
     expect(screen.getByText("Cart is empty")).toBeInTheDocument();
+    expect(screen.getByText("Tax (15%)")).toBeInTheDocument();
 
     cleanup();
+    settingsGetMock.mockResolvedValueOnce({
+      businessName: "BeanTrack",
+      receiptFooter: "Thanks",
+      defaultTaxRate: 8.25,
+    });
     productsListMock.mockResolvedValue({
       data: [{ ...sampleProduct, stockQty: 1 }],
       total: 1,
@@ -405,6 +415,7 @@ describe("business flows and failure paths", () => {
     );
 
     await screen.findByText("Dark Roast Beans");
+    expect(screen.getByText("Tax (8.25%)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Dark Roast Beans/i }));
     fireEvent.click(screen.getByRole("button", { name: /Dark Roast Beans/i }));
     expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -413,6 +424,11 @@ describe("business flows and failure paths", () => {
     }));
 
     fireEvent.click(screen.getByRole("button", { name: /Checkout/i }));
+    await waitFor(() => {
+      expect(salesCreateMock).toHaveBeenCalledWith(expect.objectContaining({
+        taxRate: 8.25,
+      }));
+    });
     await screen.findByRole("heading", { name: "Sale Complete!" });
     expect(screen.getAllByText(/Receipt #RCPT-1001/i).length).toBeGreaterThan(0);
 
@@ -441,6 +457,26 @@ describe("business flows and failure paths", () => {
         variant: "destructive",
       }));
     });
+  });
+
+  it("blocks checkout when business settings cannot be loaded", async () => {
+    settingsGetMock.mockRejectedValueOnce(new Error("settings failed"));
+    productsListMock.mockResolvedValue({
+      data: [sampleProduct],
+      total: 1,
+      page: 1,
+      pageSize: 999,
+    });
+
+    render(
+      <MemoryRouter>
+        <SalesPOSPage />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Dark Roast Beans");
+    expect(screen.getByText("Checkout unavailable because business settings could not be loaded.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Checkout unavailable" })).toBeDisabled();
   });
 
   it("covers sales history empty state and row navigation", async () => {
@@ -486,7 +522,7 @@ describe("business flows and failure paths", () => {
     expect(screen.getByRole("button", { name: "Go back" })).toBeInTheDocument();
   });
 
-  it("covers low stock empty state and restock requests", async () => {
+  it("covers low stock empty state without a fake restock action", async () => {
     render(
       <MemoryRouter>
         <LowStockPage />
@@ -505,17 +541,10 @@ describe("business flows and failure paths", () => {
     );
 
     await screen.findByText("Paper Cups");
-    fireEvent.click(screen.getByRole("button", { name: "Restock" }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit Request" }));
-
-    await waitFor(() => {
-      expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({
-        title: "Restock request for Paper Cups: 16 units",
-      }));
-    });
+    expect(screen.queryByRole("button", { name: "Restock" })).not.toBeInTheDocument();
   });
 
-  it("shows the empty reports view and saves business settings", async () => {
+  it("shows the empty reports view and handles settings save failures safely", async () => {
     render(
       <MemoryRouter>
         <ReportsPage />
@@ -549,5 +578,54 @@ describe("business flows and failure paths", () => {
       }));
     });
     expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Settings saved" }));
+
+    cleanup();
+    settingsUpdateMock.mockRejectedValueOnce(new Error("save failed"));
+
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    const failedBusinessNameInput = await screen.findByDisplayValue("BeanTrack");
+    fireEvent.change(failedBusinessNameInput, { target: { value: "BeanTrack Failure" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Failed to save business settings",
+        variant: "destructive",
+      }));
+    });
+    expect(screen.getByDisplayValue("BeanTrack Failure")).toBeInTheDocument();
+  });
+
+  it("surfaces settings load failures and profile save failures", async () => {
+    settingsGetMock.mockRejectedValueOnce(new Error("settings failed"));
+    usersListMock.mockRejectedValueOnce(new Error("users failed"));
+    updateProfileMock.mockRejectedValueOnce(new Error("profile failed"));
+
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Failed to load users.")).toBeInTheDocument();
+      expect(screen.getByText("Failed to load business settings.")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Profile" }));
+
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Failed to update profile",
+        variant: "destructive",
+      }));
+    });
   });
 });

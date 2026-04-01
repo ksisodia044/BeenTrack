@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getSessionMock = vi.fn();
@@ -66,7 +66,16 @@ vi.mock("@/integrations/supabase/client", () => ({
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 
 function AuthProbe() {
-  const { user, role, isAuthenticated } = useAuth();
+  const { user, role, isAuthenticated, authError, retryHydration } = useAuth();
+
+  if (authError) {
+    return (
+      <div>
+        <div>{authError}</div>
+        <button onClick={() => void retryHydration()}>retry</button>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <div>guest</div>;
@@ -98,6 +107,7 @@ describe("AuthProvider edge cases", () => {
     profileResult = {
       data: {
         id: "auth-user-1",
+        email: "edge@example.com",
         name: "Edge User",
         phone: null,
         is_active: true,
@@ -114,7 +124,7 @@ describe("AuthProvider edge cases", () => {
     };
   });
 
-  it("treats a missing profile as unauthenticated", async () => {
+  it("keeps the session but surfaces a blocking error when the profile is missing", async () => {
     profileResult = {
       data: null,
       error: { message: "Profile not found" },
@@ -126,7 +136,7 @@ describe("AuthProvider edge cases", () => {
       </AuthProvider>
     );
 
-    expect(await screen.findByText("guest")).toBeInTheDocument();
+    expect(await screen.findByText("Your account setup is incomplete. Please retry or contact an administrator.")).toBeInTheDocument();
   });
 
   it("defaults missing roles to STAFF when the profile exists", async () => {
@@ -142,5 +152,38 @@ describe("AuthProvider edge cases", () => {
     );
 
     expect(await screen.findByText("edge@example.com|STAFF")).toBeInTheDocument();
+  });
+
+  it("retries profile hydration without signing the user out", async () => {
+    profileResult = {
+      data: null,
+      error: { message: "Profile not found" },
+    };
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>
+    );
+
+    expect(await screen.findByText("Your account setup is incomplete. Please retry or contact an administrator.")).toBeInTheDocument();
+
+    profileResult = {
+      data: {
+        id: "auth-user-1",
+        email: "edge@example.com",
+        name: "Recovered User",
+        phone: null,
+        is_active: true,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      error: null,
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: "retry" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("edge@example.com|ADMIN")).toBeInTheDocument();
+    });
   });
 });

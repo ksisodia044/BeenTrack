@@ -10,6 +10,7 @@ const logoutMock = vi.fn();
 const updateProfileMock = vi.fn();
 const usersListMock = vi.fn();
 const settingsGetMock = vi.fn();
+const retryHydrationMock = vi.fn();
 
 const defaultUser = {
   id: "user-1",
@@ -26,10 +27,12 @@ let authState = {
   isAdmin: false,
   isAuthenticated: true,
   loading: false,
+  authError: null as string | null,
   login: vi.fn(),
   signup: vi.fn(),
   logout: logoutMock,
   updateProfile: updateProfileMock,
+  retryHydration: retryHydrationMock,
 };
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -84,6 +87,7 @@ describe("role behavior", () => {
     updateProfileMock.mockReset();
     usersListMock.mockReset();
     settingsGetMock.mockReset();
+    retryHydrationMock.mockReset();
     usersListMock.mockResolvedValue([
       { ...defaultUser, role: "STAFF" as const },
     ]);
@@ -98,10 +102,12 @@ describe("role behavior", () => {
       isAdmin: false,
       isAuthenticated: true,
       loading: false,
+      authError: null,
       login: vi.fn(),
       signup: vi.fn(),
       logout: logoutMock,
       updateProfile: updateProfileMock,
+      retryHydration: retryHydrationMock,
     };
   });
 
@@ -145,6 +151,35 @@ describe("role behavior", () => {
     );
 
     expect(await screen.findByText("Dashboard page")).toBeInTheDocument();
+  });
+
+  it("shows a blocking account setup screen when auth hydration fails", async () => {
+    authState = {
+      ...authState,
+      user: null,
+      role: null,
+      isAuthenticated: true,
+      isAdmin: false,
+      authError: "Your account setup is incomplete. Please retry or contact an administrator.",
+    };
+
+    render(
+      <MemoryRouter initialEntries={["/dashboard"]}>
+        <Routes>
+          <Route
+            path="/dashboard"
+            element={(
+              <ProtectedRoute>
+                <div>Dashboard page</div>
+              </ProtectedRoute>
+            )}
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Account setup incomplete" })).toBeInTheDocument();
+    expect(screen.queryByText("Dashboard page")).not.toBeInTheDocument();
   });
 
   it("shows admin navigation links only for admins", async () => {
